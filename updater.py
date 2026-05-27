@@ -52,8 +52,11 @@ def check_and_update() -> None:
         if up.returncode != 0 or not up.stdout.strip():
             return
 
-        # Refuse to touch a dirty tree.
-        dirty = _git("status", "--porcelain", check=False)
+        # Refuse to touch a dirty tree, but ignore untracked files (a stray
+        # untracked file or sibling folder shouldn't block auto-updates).
+        dirty = _git(
+            "status", "--porcelain", "--untracked-files=no", check=False
+        )
         if dirty.returncode == 0 and dirty.stdout.strip():
             _log("local changes detected; skipping auto-update.")
             return
@@ -66,7 +69,10 @@ def check_and_update() -> None:
 
         local = _git("rev-parse", "HEAD", check=False).stdout.strip()
         remote = _git("rev-parse", "@{u}", check=False).stdout.strip()
-        if not local or not remote or local == remote:
+        if not local or not remote:
+            return
+        if local == remote:
+            _log(f"already up to date ({local[:7]}).")
             return
 
         # Only update when upstream is strictly ahead of local.
