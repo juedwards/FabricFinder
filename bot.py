@@ -10,6 +10,12 @@ import json
 import os
 from datetime import datetime
 
+import updater
+
+# Check for a newer version on the git remote and restart if we updated.
+# Must run before we import heavy modules / read env, so the new code is used.
+updater.check_and_update()
+
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 from rich.console import Console
