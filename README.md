@@ -60,13 +60,9 @@ you > /chart histogram of tenant MAU in TX
 The first query of a session triggers an Azure AD browser sign-in; the token is
 cached for subsequent runs.
 
-## ⚠️ Docker is not supported (Conditional Access)
-
-A `Dockerfile`/`docker-compose.yml` are included, but **Fabric sign-in fails
-inside a container** with error `530033` ("device must be managed"). The org's
-Conditional Access policy requires the access to come from a managed device,
-and a container is not one — so the token gets rejected. Run natively (above)
-unless your tenant grants an explicit device-compliance exemption for this app.
+> **Note:** This must run on a managed/compliant device. Containers (Docker)
+> are rejected by the org's device-compliance Conditional Access policy
+> (error `530033`), so there is no Docker option.
 
 ## Project layout
 
