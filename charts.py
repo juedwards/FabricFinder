@@ -11,7 +11,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-CHARTS_DIR = os.path.join(os.path.dirname(__file__), "reports")
+CHARTS_DIR = os.environ.get(
+    "FABRICFINDER_REPORTS_DIR", os.path.join(os.path.dirname(__file__), "reports")
+)
 
 
 def _slug(text):

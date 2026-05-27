@@ -20,9 +20,13 @@ import worlds
 load_dotenv()
 
 BASE_DIR = os.path.dirname(__file__)
-REPORTS_DIR = os.path.join(BASE_DIR, "reports")
-MEMORY_DIR = os.path.join(BASE_DIR, "memory")
-MEMORY_FILE = os.path.join(MEMORY_DIR, "conversation_memory.json")
+REPORTS_DIR = os.environ.get(
+    "FABRICFINDER_REPORTS_DIR", os.path.join(BASE_DIR, "reports")
+)
+MEMORY_FILE = os.environ.get(
+    "FABRICFINDER_MEMORY_FILE",
+    os.path.join(BASE_DIR, "memory", "conversation_memory.json"),
+)
 MAX_TOOL_TURNS = 12
 MEMORY_RECALL = 15   # how many past interactions to feed the model
 MEMORY_KEEP = 100    # how many to retain on disk
@@ -310,7 +314,7 @@ def append_memory(question, answer_text, report_path):
             "report": os.path.basename(report_path) if report_path else None,
         }
     )
-    os.makedirs(MEMORY_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
     with open(MEMORY_FILE, "w") as f:
         json.dump(mem[-MEMORY_KEEP:], f, indent=2)
 

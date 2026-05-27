@@ -21,37 +21,49 @@ chart) to `reports/`.
   and embeds it in the report.
 - **Conversation memory** across sessions (`memory/conversation_memory.json`).
 
-## Prerequisites
+## Run with Docker (recommended for the team)
 
-- **Python 3.9+**
-- **Microsoft ODBC Driver 18 for SQL Server** (system dependency — `pyodbc`
-  links to it at runtime; it is *not* a pip package).
-  - macOS: `brew install msodbcsql18`
-- Access to the Fabric SQL endpoint with an Azure AD account.
-- An Azure OpenAI deployment.
+The Docker image bundles the Microsoft ODBC Driver 18, so the only thing each
+teammate installs is **Docker**. Everyone signs in to Fabric as themselves via
+device code (no admin setup required).
 
-## Setup
+```bash
+git clone https://github.com/jjedwards2081/FabricFinder.git
+cd FabricFinder
+cp .env.example .env          # fill in your Azure OpenAI key/endpoint
+docker compose run --rm fabricfinder
+```
+
+On first run it prints a URL + code — open it in any browser and sign in with
+your `@microsoft.com` account. Your sign-in and conversation history persist in
+a Docker volume; generated reports/CSVs/charts appear in `./reports` on your
+machine. Type `exit` to quit.
+
+> Apple Silicon: the image builds natively for arm64. If the ODBC driver ever
+> fails to install, force amd64 (emulated):
+> `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`.
+
+### Prerequisites
+- **Docker** (Desktop on macOS/Windows).
+- An Azure AD account with read access to the `HelixMCEDU` warehouse.
+- Azure OpenAI key + endpoint (in your `.env`).
+
+## Run locally without Docker
+
+Requires **Python 3.9+** and the **Microsoft ODBC Driver 18 for SQL Server**
+installed on your OS (`brew install msodbcsql18` on macOS).
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-
-cp .env.example .env      # then fill in your Azure OpenAI values
-```
-
-Place the world-lookup spreadsheet at:
-
-```
-memory/xls_data/Master Content List.xlsx
-```
-
-## Usage
-
-```bash
+cp .env.example .env          # fill in your Azure OpenAI values
 .venv/bin/python bot.py
 ```
 
-Then chat:
+The world-lookup spreadsheet must be at
+`memory/xls_data/Master Content List.xlsx`.
+
+## Using it
 
 ```
 you > What are the top 5 countries by total current MAU?
@@ -59,8 +71,8 @@ you > How many sessions did the 'Frozen Planet 2' worlds get in 2025?
 you > /chart histogram of tenant MAU in TX
 ```
 
-Type `exit` to quit. The first query of a session opens a browser for Azure AD
-sign-in; the token is cached for subsequent runs.
+The first query of a session triggers Azure AD device-code sign-in; the token
+is cached for subsequent runs.
 
 ## Project layout
 

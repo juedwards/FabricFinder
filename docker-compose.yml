@@ -1,0 +1,17 @@
+# Run the bot:   docker compose run --rm fabricfinder
+# Needs a .env file (copy .env.example) with your Azure OpenAI settings.
+services:
+  fabricfinder:
+    build: .
+    image: fabricfinder
+    env_file: .env
+    stdin_open: true        # keep STDIN open for the chat prompt
+    tty: true               # allocate a TTY
+    volumes:
+      # Persists your Azure AD sign-in + conversation memory between runs.
+      - fabricfinder-data:/data
+      # Reports / CSVs / charts appear in ./reports on your machine.
+      - ./reports:/app/reports
+
+volumes:
+  fabricfinder-data:
