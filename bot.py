@@ -62,6 +62,16 @@ SQL rules (this is Microsoft Fabric / T-SQL, read-only):
 - Prefer joining fact tables to `tenant_mapping` for tenant names and geography.
 - Keep result sets reasonable (use aggregation / TOP). Make the final query the
   one whose rows best represent the answer (it becomes the CSV export).
+- Geography: `Country` holds full English names (e.g. 'United States',
+  'United Kingdom'), NOT ISO codes like 'US'/'GB'. `Region` is a broad
+  geo/sales region, not a US state. There is no state column, so US-state
+  questions (e.g. "California") can only be approximated via `City`.
+- IMPORTANT: a filtered query returning zero rows does NOT mean the data is
+  absent — it usually means the filter value is wrong. Before telling the user
+  something isn't in the data, verify the real values, e.g.
+  `SELECT TOP 50 Country, COUNT(*) c FROM ... GROUP BY Country ORDER BY c DESC`
+  (always ORDER BY when sampling; an unordered TOP returns arbitrary rows), then
+  retry with the correct value.
 
 Charts:
 - When the user asks for a chart (or sends a [CHART REQUEST]), gather the data
@@ -273,7 +283,7 @@ def save_report(title, markdown_body, result):
     if result and result.get("columns"):
         cols, rows = _enrich_world_names(result["columns"], result["rows"])
         csv_path = os.path.join(REPORTS_DIR, stem + ".csv")
-        with open(csv_path, "w", newline="") as f:
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(cols)
             writer.writerows(rows)
@@ -286,7 +296,7 @@ def save_report(title, markdown_body, result):
         meta.append(f"*Data export: [{os.path.basename(csv_path)}]"
                     f"({os.path.basename(csv_path)})*  ")
     header = f"# {title}\n\n" + "\n".join(meta) + "\n\n---\n\n"
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(header + markdown_body.strip() + "\n")
     return {"report": md_path, "csv": csv_path}
 
@@ -297,7 +307,7 @@ def save_report(title, markdown_body, result):
 def load_memory() -> list:
     if os.path.exists(MEMORY_FILE):
         try:
-            with open(MEMORY_FILE) as f:
+            with open(MEMORY_FILE, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return []
@@ -315,7 +325,7 @@ def append_memory(question, answer_text, report_path):
         }
     )
     os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-    with open(MEMORY_FILE, "w") as f:
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
         json.dump(mem[-MEMORY_KEEP:], f, indent=2)
 
 
