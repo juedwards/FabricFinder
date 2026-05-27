@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+
+# Generated output
+reports/
+
+# Runtime memory (may contain internal query results)
+memory/conversation_memory.json
+
+# Internal data: ignore everything in xls_data EXCEPT the world-lookup file
+memory/xls_data/*
+!memory/xls_data/Master Content List.xlsx
+
+# OS
+.DS_Store
