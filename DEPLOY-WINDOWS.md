@@ -3,7 +3,7 @@
 A step-by-step setup. Takes ~10 minutes, once.
 
 **Before you start:** you must be on your managed work laptop, and you must have
-been given access to the FabricFinder GitHub repo (ask Justin) and the Azure
+been given access to the FabricFinder GitHub repo and the Azure
 OpenAI key/endpoint values.
 
 ---
