@@ -29,6 +29,7 @@ from rich.text import Text
 
 import charts
 import db
+import tenant_report
 import worlds
 
 console = Console()
@@ -43,7 +44,7 @@ MEMORY_FILE = os.environ.get(
     "FABRICFINDER_MEMORY_FILE",
     os.path.join(BASE_DIR, "memory", "conversation_memory.json"),
 )
-MAX_TOOL_TURNS = 12
+MAX_TOOL_TURNS = 24
 MEMORY_RECALL = 15   # how many past interactions to feed the model
 MEMORY_KEEP = 100    # how many to retain on disk
 
@@ -273,6 +274,102 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_tenant_pdf",
+            "description": (
+                "Render a detailed, fact-only PDF report for a SINGLE tenant. "
+                "Use only for /tenant requests. Gather every field with run_sql "
+                "FIRST; do not invent figures. Include the full available "
+                "monthly history of MAU and NUA (oldest first), the current "
+                "full month, the year-over-year comparison vs. the same month "
+                "one year earlier, top content by sessions, device breakdown, "
+                "and a status classification (HEALTHY / INTENSIVE / PIPELINE / "
+                "DECLINE) with a one-line factual rationale. Highlights must be "
+                "facts (numbers, ratios, ranks) — no assumptions or advice."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tenant_name": {"type": "string"},
+                    "tenant_id":   {"type": "string"},
+                    "geography": {
+                        "type": "object",
+                        "properties": {
+                            "country": {"type": "string"},
+                            "region":  {"type": "string"},
+                            "city":    {"type": "string"},
+                        },
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["HEALTHY", "INTENSIVE", "PIPELINE", "DECLINE"],
+                    },
+                    "status_rationale": {"type": "string"},
+                    "current_month": {
+                        "type": "object",
+                        "properties": {
+                            "month": {"type": "string"},
+                            "mau":   {"type": "number"},
+                            "nua":   {"type": "number"},
+                        },
+                    },
+                    "yoy": {
+                        "type": "object",
+                        "properties": {
+                            "prior_month":    {"type": "string"},
+                            "prior_mau":      {"type": "number"},
+                            "prior_nua":      {"type": "number"},
+                            "mau_change_pct": {"type": "number"},
+                            "nua_change_pct": {"type": "number"},
+                        },
+                    },
+                    "monthly_series": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "month": {"type": "string"},
+                                "mau":   {"type": "number"},
+                                "nua":   {"type": "number"},
+                            },
+                            "required": ["month"],
+                        },
+                    },
+                    "top_content": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name":     {"type": "string"},
+                                "sessions": {"type": "number"},
+                            },
+                        },
+                    },
+                    "device_breakdown": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "device": {"type": "string"},
+                                "value":  {"type": "number"},
+                            },
+                        },
+                    },
+                    "highlights":   {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "data_sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["tenant_name", "status"],
+            },
+        },
+    },
 ]
 
 
@@ -411,6 +508,14 @@ def _handle_tool_call(call, state):
         if paths["csv"]:
             console.print(f"  [dim]↳ csv saved:    {paths['csv']}[/]")
         return json.dumps({"saved_to": paths["report"], "csv": paths["csv"]})
+    if name == "save_tenant_pdf":
+        try:
+            path = tenant_report.render_tenant_pdf(args)
+            state["report_path"] = path
+            console.print(f"  [dim]↳ tenant PDF saved: {path}[/]")
+            return json.dumps({"saved_to": path})
+        except Exception as e:
+            return json.dumps({"error": str(e)})
     return json.dumps({"error": f"unknown tool {name}"})
 
 
@@ -461,6 +566,7 @@ def main():
                 "What would you like to know?\n"
                 "[dim]Type 'exit' to quit.  Commands: "
                 "'/chart <prompt>' makes a chart, "
+                "'/tenant <name>' produces a tenant PDF report, "
                 "'/log' bundles usage logs, "
                 "'/version' shows the running version.[/]"
             ),
@@ -521,6 +627,51 @@ def main():
                 "Honor the chart type if one is named; otherwise infer the best "
                 "fit. Gather data with run_sql (bucket distributions in SQL), "
                 "call create_chart, then save_report embedding the image."
+            )
+        elif low.startswith("/tenant"):
+            name = q[len("/tenant"):].strip()
+            if not name:
+                console.print(
+                    "[yellow]Usage:[/] /tenant <tenant name or partial name>"
+                )
+                continue
+            content = (
+                f"[TENANT REPORT REQUEST] Tenant: {name!r}.\n"
+                "Produce a detailed, FACT-ONLY PDF report. Steps:\n"
+                "1. Resolve the tenant. Query tenant_mapping (or whatever the "
+                "schema names it) with a case-insensitive LIKE on the name. If "
+                "MORE THAN ONE distinct tenant matches, STOP and ask the user "
+                "which one they meant — show a short numbered list with name, "
+                "country, and tenant id. Do NOT call save_tenant_pdf yet.\n"
+                "2. Once a single tenant is identified, gather (each via "
+                "run_sql, joining on the tenant id):\n"
+                "   a. The FULL available history of monthly MAU and NUA "
+                "      (oldest first). Use the canonical month column (cast to "
+                "      YYYY-MM strings).\n"
+                "   b. The current full month MAU and NUA.\n"
+                "   c. Year-over-year comparison: the same month one year "
+                "      earlier, plus % change for MAU and NUA.\n"
+                "   d. Top 10 content/worlds by sessions for this tenant from "
+                "      content_sessions_monthly (resolve world_product_id "
+                "      with name_worlds).\n"
+                "   e. Device breakdown (sessions or users) if a device or "
+                "      platform column exists; otherwise omit.\n"
+                "   f. Any other long-view facts: months active, peak MAU + "
+                "      month, peak NUA + month.\n"
+                "3. Classify status using ONLY these rules (compare current "
+                "month vs. 3-month and 12-month trend):\n"
+                "   - HEALTHY   = MAU growth AND NUA growth\n"
+                "   - INTENSIVE = MAU flat, NUA growth\n"
+                "   - PIPELINE  = MAU growth, NUA flat or declining\n"
+                "   - DECLINE   = MAU decline AND NUA decline\n"
+                "   Pick the closest match for edge cases. The rationale must "
+                "   cite the specific % changes you observed — no opinions, no "
+                "   forecasts, no recommendations.\n"
+                "4. Call save_tenant_pdf ONCE with all the gathered fields. "
+                "   highlights[] must be short factual statements (numbers, "
+                "   ranks, months) — never assumptions, never advice.\n"
+                "5. In chat, reply with a brief one-paragraph summary and the "
+                "   saved PDF path."
             )
         else:
             content = q
