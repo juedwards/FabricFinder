@@ -1,17 +1,20 @@
 """Auth + connection to the Microsoft Fabric SQL endpoint (HelixMCEDU).
 
-Uses device-code Azure AD sign-in (azure-identity) so it works headless / in a
-container: on first use it prints a URL + code; you sign in as yourself on any
-device. The token is cached (persisted under $HOME) so later runs are silent.
-Each user authenticates as themselves, so queries run under their own access.
+Uses interactive-browser Azure AD sign-in (azure-identity). On a managed /
+compliant device this satisfies the org's device-compliance Conditional Access
+policy, because the token is issued *and* used on that device. (Device-code /
+container auth is blocked by that policy — see README.)
 
+Each user signs in as themselves; the token is cached so later runs are silent.
 The token is handed to ODBC Driver 18 via SQL_COPT_SS_ACCESS_TOKEN.
 """
-import os
 import struct
 
 import pyodbc
-from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions
+from azure.identity import (
+    InteractiveBrowserCredential,
+    TokenCachePersistenceOptions,
+)
 
 SERVER = (
     "x6eps4xrq2xudenlfv6naeo3i4-y5zi6fikvfiezh6qzzse7aehui"
@@ -19,11 +22,6 @@ SERVER = (
 )
 DEFAULT_DATABASE = "HelixMCEDU"
 TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"  # Microsoft corp (MSIT)
-# Azure CLI public client id: a first-party public client pre-authorized for
-# the SQL scope, so device-code sign-in needs no app registration / consent.
-CLIENT_ID = os.environ.get(
-    "FABRICFINDER_CLIENT_ID", "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
-)
 SCOPE = "https://database.windows.net/.default"
 SQL_COPT_SS_ACCESS_TOKEN = 1256
 
@@ -33,13 +31,10 @@ _credential = None
 def _get_credential():
     global _credential
     if _credential is None:
-        _credential = DeviceCodeCredential(
-            client_id=CLIENT_ID,
+        _credential = InteractiveBrowserCredential(
             tenant_id=TENANT_ID,
             cache_persistence_options=TokenCachePersistenceOptions(
-                name="fabricfinder",
-                # No system keyring in a slim container; allow file cache.
-                allow_unencrypted_storage=True,
+                name="fabricfinder"
             ),
         )
     return _credential
@@ -68,7 +63,7 @@ def connect(database=DEFAULT_DATABASE):
 
 
 if __name__ == "__main__":
-    print("Signing in (device code) ...")
+    print("Signing in (browser) ...")
     with connect() as conn:
         cur = conn.cursor()
         cur.execute("SELECT SUSER_SNAME();")

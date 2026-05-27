@@ -21,47 +21,33 @@ chart) to `reports/`.
   and embeds it in the report.
 - **Conversation memory** across sessions (`memory/conversation_memory.json`).
 
-## Run with Docker (recommended for the team)
+## Quick start (recommended)
 
-The Docker image bundles the Microsoft ODBC Driver 18, so the only thing each
-teammate installs is **Docker**. Everyone signs in to Fabric as themselves via
-device code (no admin setup required).
+Runs natively on your managed/compliant device, which is required to satisfy
+the org's device-compliance Conditional Access policy (see note below).
 
 ```bash
 git clone https://github.com/jjedwards2081/FabricFinder.git
 cd FabricFinder
-cp .env.example .env          # fill in your Azure OpenAI key/endpoint
-docker compose run --rm fabricfinder
+./setup.sh                    # venv + deps + ODBC Driver 18 (Homebrew on macOS)
+# edit .env with your Azure OpenAI key/endpoint
+./run.sh
 ```
 
-On first run it prints a URL + code — open it in any browser and sign in with
-your `@microsoft.com` account. Your sign-in and conversation history persist in
-a Docker volume; generated reports/CSVs/charts appear in `./reports` on your
-machine. Type `exit` to quit.
-
-> Apple Silicon: the image builds natively for arm64. If the ODBC driver ever
-> fails to install, force amd64 (emulated):
-> `DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose build`.
+On the first query a browser opens for Azure AD sign-in — sign in with your
+`@microsoft.com` account. Each user signs in as themselves; the token is cached
+for later runs. Type `exit` to quit.
 
 ### Prerequisites
-- **Docker** (Desktop on macOS/Windows).
+- A **managed/compliant** device (corp laptop) — see the Conditional Access note.
+- **Python 3.9+** and **Homebrew** (macOS) for the ODBC driver install.
 - An Azure AD account with read access to the `HelixMCEDU` warehouse.
 - Azure OpenAI key + endpoint (in your `.env`).
 
-## Run locally without Docker
-
-Requires **Python 3.9+** and the **Microsoft ODBC Driver 18 for SQL Server**
-installed on your OS (`brew install msodbcsql18` on macOS).
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env          # fill in your Azure OpenAI values
-.venv/bin/python bot.py
-```
-
-The world-lookup spreadsheet must be at
-`memory/xls_data/Master Content List.xlsx`.
+> **Manual setup** (instead of `setup.sh`): install the ODBC Driver 18
+> (`brew install msodbcsql18` on macOS), then
+> `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`,
+> `cp .env.example .env`, and `.venv/bin/python bot.py`.
 
 ## Using it
 
@@ -71,8 +57,16 @@ you > How many sessions did the 'Frozen Planet 2' worlds get in 2025?
 you > /chart histogram of tenant MAU in TX
 ```
 
-The first query of a session triggers Azure AD device-code sign-in; the token
-is cached for subsequent runs.
+The first query of a session triggers an Azure AD browser sign-in; the token is
+cached for subsequent runs.
+
+## ⚠️ Docker is not supported (Conditional Access)
+
+A `Dockerfile`/`docker-compose.yml` are included, but **Fabric sign-in fails
+inside a container** with error `530033` ("device must be managed"). The org's
+Conditional Access policy requires the access to come from a managed device,
+and a container is not one — so the token gets rejected. Run natively (above)
+unless your tenant grants an explicit device-compliance exemption for this app.
 
 ## Project layout
 
@@ -83,6 +77,7 @@ is cached for subsequent runs.
 | `db.py` | Schema introspection + read-only query guard. |
 | `worlds.py` | World name ↔ product-ID lookup from the content-list spreadsheet. |
 | `charts.py` | Headless PNG chart rendering. |
+| `setup.sh` / `run.sh` | One-time onboarding (venv, deps, ODBC driver) and launcher. |
 | `reports/` | Generated reports, CSVs, charts (gitignored). |
 | `memory/` | Conversation memory + data files. |
 
