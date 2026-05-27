@@ -26,6 +26,11 @@ chart) to `reports/`.
 Runs natively on your managed/compliant device, which is required to satisfy
 the org's device-compliance Conditional Access policy (see note below).
 
+> **On Windows 11?** Follow the step-by-step **[Windows deployment guide
+> →](DEPLOY-WINDOWS.md)** (uses `setup.ps1` / `run.ps1`).
+
+**macOS:**
+
 ```bash
 git clone https://github.com/jjedwards2081/FabricFinder.git
 cd FabricFinder
@@ -73,7 +78,8 @@ cached for subsequent runs.
 | `db.py` | Schema introspection + read-only query guard. |
 | `worlds.py` | World name ↔ product-ID lookup from the content-list spreadsheet. |
 | `charts.py` | Headless PNG chart rendering. |
-| `setup.sh` / `run.sh` | One-time onboarding (venv, deps, ODBC driver) and launcher. |
+| `setup.sh` / `run.sh` | macOS onboarding (venv, deps, ODBC driver) and launcher. |
+| `setup.ps1` / `run.ps1` | Windows onboarding and launcher (see `DEPLOY-WINDOWS.md`). |
 | `reports/` | Generated reports, CSVs, charts (gitignored). |
 | `memory/` | Conversation memory + data files. |
 
