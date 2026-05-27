@@ -31,6 +31,35 @@ def _git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     )
 
 
+def get_version() -> str:
+    """Return a human-readable version string for the running checkout.
+
+    Format: "<short-sha>[-dirty] (<branch>, <YYYY-MM-DD>)" when in a git tree,
+    otherwise "unknown".
+    """
+    if not os.path.isdir(os.path.join(REPO_DIR, ".git")):
+        return "unknown"
+    if shutil.which("git") is None:
+        return "unknown"
+    try:
+        sha = _git("rev-parse", "--short", "HEAD", check=False).stdout.strip()
+        if not sha:
+            return "unknown"
+        branch = _git(
+            "rev-parse", "--abbrev-ref", "HEAD", check=False
+        ).stdout.strip() or "?"
+        date = _git(
+            "log", "-1", "--format=%cs", check=False
+        ).stdout.strip() or "?"
+        dirty = _git(
+            "status", "--porcelain", "--untracked-files=no", check=False
+        ).stdout.strip()
+        suffix = "-dirty" if dirty else ""
+        return f"{sha}{suffix} ({branch}, {date})"
+    except Exception:
+        return "unknown"
+
+
 def _log(msg: str) -> None:
     print(f"[updater] {msg}", flush=True)
 

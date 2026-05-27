@@ -8,6 +8,7 @@ __pycache__/
 
 # Generated output
 reports/
+logs/
 
 # Runtime memory (may contain internal query results)
 memory/conversation_memory.json

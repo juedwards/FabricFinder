@@ -11,10 +11,13 @@ import os
 from datetime import datetime
 
 import updater
+import usage_log
 
 # Check for a newer version on the git remote and restart if we updated.
 # Must run before we import heavy modules / read env, so the new code is used.
 updater.check_and_update()
+
+APP_VERSION = updater.get_version()
 
 from dotenv import load_dotenv
 from openai import AzureOpenAI
@@ -412,11 +415,24 @@ def _handle_tool_call(call, state):
 
 
 def answer(messages, state):
-    """Run the tool-calling loop until the model produces a final reply."""
+    """Run the tool-calling loop until the model produces a final reply.
+
+    Accumulates token usage across every LLM call in ``state['usage']``.
+    """
+    usage = state.setdefault(
+        "usage",
+        {"prompt_tokens": 0, "completion_tokens": 0,
+         "total_tokens": 0, "llm_calls": 0},
+    )
     for _ in range(MAX_TOOL_TURNS):
         resp = client.chat.completions.create(
             model=DEPLOYMENT, messages=messages, tools=TOOLS
         )
+        if getattr(resp, "usage", None) is not None:
+            usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
+            usage["completion_tokens"] += resp.usage.completion_tokens or 0
+            usage["total_tokens"] += resp.usage.total_tokens or 0
+        usage["llm_calls"] += 1
         msg = resp.choices[0].message
         messages.append(msg.model_dump(exclude_none=True))
         if not msg.tool_calls:
@@ -440,11 +456,13 @@ def main():
         Panel.fit(
             Text.from_markup(
                 "[bold cyan]Welcome to FabricFinder![/]\n"
+                f"[dim]version:[/] [bold]{APP_VERSION}[/]\n"
                 "Connected to the [bold]HelixMCEDU[/] Fabric warehouse.\n\n"
                 "What would you like to know?\n"
-                "[dim]Type 'exit' to quit.  "
-                "Tip: '/chart <prompt>' makes a chart, e.g. "
-                "'/chart histogram of tenant MAU in TX'.[/]"
+                "[dim]Type 'exit' to quit.  Commands: "
+                "'/chart <prompt>' makes a chart, "
+                "'/log' bundles usage logs, "
+                "'/version' shows the running version.[/]"
             ),
             border_style="cyan",
         )
@@ -469,7 +487,34 @@ def main():
             break
         if not q:
             continue
-        if q.lower().startswith("/chart"):
+        low = q.lower()
+        if low in {"/version", "/v"}:
+            console.print(f"[cyan]FabricFinder version:[/] {APP_VERSION}")
+            continue
+        if low.startswith("/log"):
+            zip_path = usage_log.bundle_logs(REPORTS_DIR)
+            totals = usage_log.session_totals()
+            cost_str = (
+                f"${totals['cost_usd']:.4f}"
+                + ("" if totals["cost_known"] else " (partial — unknown model)")
+            )
+            console.print(
+                Panel.fit(
+                    Text.from_markup(
+                        f"[bold]Usage logs bundled[/]\n"
+                        f"[dim]file:[/] {zip_path}\n\n"
+                        f"[bold]This session so far[/]\n"
+                        f"  turns:             {totals['turns']}\n"
+                        f"  LLM prompt tokens: {totals['prompt_tokens']:,}\n"
+                        f"  LLM output tokens: {totals['completion_tokens']:,}\n"
+                        f"  LLM total tokens:  {totals['total_tokens']:,}\n"
+                        f"  estimated cost:    {cost_str}"
+                    ),
+                    border_style="cyan",
+                )
+            )
+            continue
+        if low.startswith("/chart"):
             prompt = q[len("/chart"):].strip()
             content = (
                 f"[CHART REQUEST] Build a chart for: {prompt}\n"
@@ -481,12 +526,40 @@ def main():
             content = q
         messages.append({"role": "user", "content": content})
         state = {}
-        reply = answer(messages, state)
+        error = None
+        try:
+            reply = answer(messages, state)
+        except Exception as e:
+            error = repr(e)
+            reply = f"(error: {e})"
         append_memory(q, reply, state.get("report_path"))
+        u = state.get("usage", {})
+        usage_log.log_turn(
+            question=q,
+            reply=reply,
+            prompt_tokens=u.get("prompt_tokens", 0),
+            completion_tokens=u.get("completion_tokens", 0),
+            total_tokens=u.get("total_tokens", 0),
+            llm_calls=u.get("llm_calls", 0),
+            model=DEPLOYMENT,
+            version=APP_VERSION,
+            report_path=state.get("report_path"),
+            chart_path=state.get("chart_path"),
+            error=error,
+        )
         console.print()
         console.print(Rule("[bold cyan]bot[/]", style="cyan", align="left"))
         console.print(Markdown(reply or "(no response)"))
         console.print(Rule(style="cyan"))
+        cost = usage_log.estimate_cost(
+            DEPLOYMENT, u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
+        )
+        cost_part = f" · ~${cost:.4f}" if cost is not None else ""
+        console.print(
+            f"[dim]tokens: {u.get('total_tokens', 0):,} "
+            f"(prompt {u.get('prompt_tokens', 0):,}, "
+            f"output {u.get('completion_tokens', 0):,}){cost_part}[/]"
+        )
         console.print()
 
 
