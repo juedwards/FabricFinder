@@ -61,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 The first time you ask a question, a browser opens — **sign in with your
 `@microsoft.com` account**. That's it. Ask away:
 
-```
+```text
 you > What are the top 5 countries by total current MAU?
 you > /chart histogram of tenant MAU in TX
 ```
@@ -75,10 +75,10 @@ Reports appear in the `reports` folder. Type `exit` to quit.
 ## Troubleshooting
 
 | Problem | Fix |
-|--------|-----|
+| --- | --- |
 | `winget` not recognized | Update "App Installer" from the Microsoft Store, or install the three apps from Company Portal. |
 | `python` not recognized after install | Close and reopen PowerShell (PATH needs a refresh). |
 | `setup.ps1` says ODBC driver missing | Run `winget install -e --id Microsoft.msodbcsql.18` (may need admin / Company Portal). |
 | Script "cannot be loaded because running scripts is disabled" | Use the exact command shown (`powershell -ExecutionPolicy Bypass -File ...`). |
 | Sign-in error **530033** ("device must be managed") | You're not on a managed/compliant device — use your corp laptop. |
-| Git asks for a password and fails | You haven't been granted repo access yet — ask Justin to add you. |
+| Git asks for a password and fails | You haven't been granted repo access yet — ask the repo owner to add you as a collaborator. |
