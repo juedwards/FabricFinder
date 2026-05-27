@@ -12,10 +12,17 @@ from datetime import datetime
 
 from dotenv import load_dotenv
 from openai import AzureOpenAI
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.text import Text
 
 import charts
 import db
 import worlds
+
+console = Console()
 
 load_dotenv()
 
@@ -99,6 +106,16 @@ Worlds / content:
 
 Schema (database dbo):
 {schema}
+
+Reply formatting (the chat reply, not the saved report):
+- Always respond in GitHub-Flavored Markdown so it renders well in the terminal.
+- Lead with a short `##` heading naming the answer.
+- When you have tabular results, present them as a Markdown table (pipes and a
+  `---` separator row). Right-align numeric columns by using `---:` in the
+  separator. Format large integers with thousands separators. Limit to the top
+  ~15 rows in chat; mention if the CSV has more.
+- Use `**bold**` for key figures and short bullet lists for takeaways.
+- Close with a one-line pointer to the saved report filename when applicable.
 
 Prior conversation history (most recent last; may be empty):
 {memory}
@@ -349,7 +366,7 @@ def _handle_tool_call(call, state):
     name = call.function.name
     args = json.loads(call.function.arguments or "{}")
     if name == "run_sql":
-        print("  \033[2m↳ running SQL...\033[0m")
+        console.print("  [dim]↳ running SQL...[/]")
         try:
             result = db.run_query(args.get("query", ""))
             state["last_result"] = result  # remember for CSV export
@@ -358,8 +375,10 @@ def _handle_tool_call(call, state):
             return json.dumps({"error": str(e)})
     if name == "search_worlds":
         hits = worlds.search_worlds(args.get("name", ""))
-        print(f"  \033[2m↳ world lookup: '{args.get('name','')}' "
-              f"→ {len(hits)} match(es)\033[0m")
+        console.print(
+            f"  [dim]↳ world lookup: '{args.get('name','')}' "
+            f"→ {len(hits)} match(es)[/]"
+        )
         return json.dumps(
             {"matches": [{"name": w["name"], "product_id": w["product_id"]}
                          for w in hits]}
@@ -370,7 +389,7 @@ def _handle_tool_call(call, state):
         try:
             path = charts.render_chart(args)
             state["chart_path"] = path
-            print(f"  \033[2m↳ chart created: {path}\033[0m")
+            console.print(f"  [dim]↳ chart created: {path}[/]")
             return json.dumps({"chart_file": os.path.basename(path)})
         except Exception as e:
             return json.dumps({"error": str(e)})
@@ -379,10 +398,9 @@ def _handle_tool_call(call, state):
             args["title"], args["markdown_body"], state.get("last_result")
         )
         state["report_path"] = paths["report"]
-        note = f"  \033[2m↳ report saved: {paths['report']}"
+        console.print(f"  [dim]↳ report saved: {paths['report']}[/]")
         if paths["csv"]:
-            note += f"\n  ↳ csv saved:    {paths['csv']}"
-        print(note + "\033[0m")
+            console.print(f"  [dim]↳ csv saved:    {paths['csv']}[/]")
         return json.dumps({"saved_to": paths["report"], "csv": paths["csv"]})
     return json.dumps({"error": f"unknown tool {name}"})
 
@@ -406,10 +424,17 @@ def answer(messages, state):
 
 
 def main():
-    print("\033[1mFabricFinder\033[0m — ask about HelixMCEDU. "
-          "Type 'exit' to quit.")
-    print("\033[2mTip: '/chart <prompt>' makes a chart, e.g. "
-          "'/chart histogram of tenant MAU in TX'.\033[0m\n")
+    console.print(
+        Panel.fit(
+            Text.from_markup(
+                "[bold cyan]FabricFinder[/] — ask about HelixMCEDU.\n"
+                "[dim]Type 'exit' to quit.  "
+                "Tip: '/chart <prompt>' makes a chart, e.g. "
+                "'/chart histogram of tenant MAU in TX'.[/]"
+            ),
+            border_style="cyan",
+        )
+    )
     schema = db.get_schema_context()
     messages = [
         {
@@ -423,9 +448,9 @@ def main():
     ]
     while True:
         try:
-            q = input("\033[1myou >\033[0m ").strip()
+            q = console.input("[bold green]you ›[/] ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nbye")
+            console.print("\n[dim]bye[/]")
             break
         if q.lower() in {"exit", "quit"}:
             break
@@ -445,7 +470,11 @@ def main():
         state = {}
         reply = answer(messages, state)
         append_memory(q, reply, state.get("report_path"))
-        print(f"\n\033[36mbot >\033[0m {reply}\n")
+        console.print()
+        console.print(Rule("[bold cyan]bot[/]", style="cyan", align="left"))
+        console.print(Markdown(reply or "(no response)"))
+        console.print(Rule(style="cyan"))
+        console.print()
 
 
 if __name__ == "__main__":
