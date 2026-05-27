@@ -32,7 +32,7 @@ the org's device-compliance Conditional Access policy (see note below).
 **macOS:**
 
 ```bash
-git clone https://github.com/jjedwards2081/FabricFinder.git
+git clone https://github.com/juedwards/FabricFinder.git
 cd FabricFinder
 ./setup.sh                    # venv + deps + ODBC Driver 18 (Homebrew on macOS)
 # edit .env with your Azure OpenAI key/endpoint

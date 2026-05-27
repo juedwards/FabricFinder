@@ -28,7 +28,7 @@ three from **Company Portal / Software Center** instead:
 
 ```powershell
 cd $HOME\Documents
-git clone https://github.com/jjedwards2081/FabricFinder.git
+git clone https://github.com/juedwards/FabricFinder.git
 cd FabricFinder
 ```
 
