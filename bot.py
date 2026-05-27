@@ -430,10 +430,18 @@ def answer(messages, state):
 
 
 def main():
+    # Connect first (this triggers interactive sign-in on the first run), then
+    # welcome the user once we actually have the schema in hand.
+    with console.status(
+        "[cyan]Connecting to HelixMCEDU…[/]", spinner="dots"
+    ):
+        schema = db.get_schema_context()
     console.print(
         Panel.fit(
             Text.from_markup(
-                "[bold cyan]FabricFinder[/] — ask about HelixMCEDU.\n"
+                "[bold cyan]Welcome to FabricFinder![/]\n"
+                "Connected to the [bold]HelixMCEDU[/] Fabric warehouse.\n\n"
+                "What would you like to know?\n"
                 "[dim]Type 'exit' to quit.  "
                 "Tip: '/chart <prompt>' makes a chart, e.g. "
                 "'/chart histogram of tenant MAU in TX'.[/]"
@@ -441,7 +449,6 @@ def main():
             border_style="cyan",
         )
     )
-    schema = db.get_schema_context()
     messages = [
         {
             "role": "system",

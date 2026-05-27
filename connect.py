@@ -9,6 +9,18 @@ Each user signs in as themselves; the token is cached so later runs are silent.
 The token is handed to ODBC Driver 18 via SQL_COPT_SS_ACCESS_TOKEN.
 """
 import struct
+import warnings
+
+# MSAL >=1.33 prints a UserWarning recommending response_mode='form_post' (RFC
+# 9700 §4.3.1). azure-identity's InteractiveBrowserCredential doesn't expose
+# that option, and the loopback redirect flow it uses is already safe, so the
+# advice doesn't apply here. Silence just that specific message.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*response_mode='form_post' is recommended.*",
+    category=UserWarning,
+    module=r"msal\.oauth2cli\.oauth2",
+)
 
 import pyodbc
 from azure.identity import (
