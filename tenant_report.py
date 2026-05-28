@@ -446,6 +446,47 @@ def render_tenant_pdf(spec: dict) -> str:
         story.append(Image(device_path, width=5.0 * inch, height=3.3 * inch))
         story.append(Spacer(1, 0.12 * inch))
 
+    # --- Account contact (from LXP) --------------------------------------- #
+    contact = spec.get("account_contact") or {}
+    _CONTACT_ROWS = [
+        ("Account Manager (alias)", "am"),
+        ("Account Executive",       "account_executive"),
+        ("Vertical",                "vertical"),
+        ("Field Area",              "field_area"),
+        ("Field Region",            "field_region"),
+        ("Sales Unit",              "sales_unit"),
+        ("Dominant SKU",            "dominant_position"),
+        ("Primary Upsell",          "primary_upsell"),
+        ("Renewal Date",            "renewal_date"),
+        ("Renewal/Midterm Flag",    "renewal_flag"),
+        ("Earliest Anniversary",    "earliest_anniversary"),
+        ("Advisory Board",          "advisory_board"),
+        ("FY26 Engagement",         "fy26_engagement"),
+        ("Training Partner",        "training_partner"),
+        ("Technical Blocker",       "technical_blocker"),
+    ]
+    rows = [[label, str(contact[key])]
+            for label, key in _CONTACT_ROWS
+            if contact.get(key) not in (None, "")]
+    if rows:
+        story.append(Paragraph("Account contact (LXP)", h2))
+        ct = Table([["Field", "Value"]] + rows,
+                   colWidths=[2.2 * inch, 5.0 * inch])
+        ct.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECEFF1")),
+            ("FONTNAME", (0, 0), (-1, -1), BASE_FONT),
+            ("FONTNAME", (0, 0), (-1, 0), BOLD_FONT),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ]))
+        story.append(ct)
+        story.append(Spacer(1, 0.14 * inch))
+
     # --- Highlights -------------------------------------------------------- #
     highlights = spec.get("highlights") or []
     if highlights:

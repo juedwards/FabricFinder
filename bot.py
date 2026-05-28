@@ -29,6 +29,7 @@ from rich.text import Text
 
 import charts
 import db
+import lxp
 import tenant_report
 import worlds
 
@@ -101,6 +102,18 @@ Charts:
   true histogram when the row count is small.
 - After creating the chart, call `save_report` and embed the image in the
   Markdown body using the returned filename: `![<title>](<filename>.png)`.
+
+Tenants / account contacts (LXP):
+- The warehouse has no Account Manager / Account Executive column. Use
+  `lookup_tenant_contacts` with a tenant_id (GUID) or partial tenant name to
+  fetch AM (account-manager alias), Account Executive, vertical, field region,
+  renewal date, advisory-board status, FY26 engagement notes, etc., sourced
+  from the LXP-derived workbook.
+- If the user asks "who owns/covers this tenant", "who is the AE/AM/account
+  manager for X", "when does it renew", or similar contact/renewal questions,
+  call this tool BEFORE answering — those facts are only in LXP.
+- If the lookup returns multiple matches, show the user a short list and ask
+  which one they mean rather than guessing.
 
 Worlds / content:
 - The only table with content usage is `content_sessions_monthly`, and it
@@ -195,6 +208,37 @@ TOOLS = [
                     }
                 },
                 "required": ["product_ids"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_tenant_contacts",
+            "description": (
+                "Look up tenant detail from the LXP-derived workbook by "
+                "TenantId (GUID) or by case-insensitive substring on tenant "
+                "name. Returns 0..N matches, each with AM (account-manager "
+                "alias), Account Executive, vertical, field region, renewal "
+                "date, advisory-board status, FY26 engagement notes, and "
+                "other contact/account fields. Use this for any 'who covers "
+                "X', 'AM/AE for X', or renewal-date question — the warehouse "
+                "does not have these columns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Tenant GUID or partial tenant name.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max name-match results to return "
+                        "(default 10).",
+                    },
+                },
+                "required": ["query"],
             },
         },
     },
@@ -385,6 +429,31 @@ TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                     },
+                    "account_contact": {
+                        "type": "object",
+                        "description": (
+                            "Optional contact/account block from "
+                            "lookup_tenant_contacts. Pass through verbatim; do "
+                            "not invent fields."
+                        ),
+                        "properties": {
+                            "am":                {"type": "string"},
+                            "account_executive": {"type": "string"},
+                            "vertical":          {"type": "string"},
+                            "field_area":        {"type": "string"},
+                            "field_region":      {"type": "string"},
+                            "sales_unit":        {"type": "string"},
+                            "dominant_position": {"type": "string"},
+                            "primary_upsell":    {"type": "string"},
+                            "renewal_date":      {"type": "string"},
+                            "renewal_flag":      {"type": "string"},
+                            "earliest_anniversary": {"type": "string"},
+                            "advisory_board":    {"type": "string"},
+                            "fy26_engagement":   {"type": "string"},
+                            "training_partner":  {"type": "string"},
+                            "technical_blocker": {"type": "string"},
+                        },
+                    },
                     "data_sources": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -420,6 +489,21 @@ def _enrich_world_names(columns, rows):
     return new_cols, new_rows
 
 
+def _enrich_tenant_contacts(columns, rows):
+    """If results contain a TenantId column, append LXP contact columns."""
+    lower = [c.lower().replace("_", "").replace(" ", "") for c in columns]
+    tid_idx = next(
+        (i for i, c in enumerate(lower) if c in {"tenantid", "tenant"}),
+        None,
+    )
+    if tid_idx is None:
+        return columns, rows
+    extra_cols = lxp.enrich_columns()
+    new_cols = list(columns) + extra_cols
+    new_rows = [list(r) + lxp.enrich_row(r[tid_idx]) for r in rows]
+    return new_cols, new_rows
+
+
 def save_report(title, markdown_body, result):
     os.makedirs(REPORTS_DIR, exist_ok=True)
     now = datetime.now()
@@ -429,6 +513,7 @@ def save_report(title, markdown_body, result):
     csv_path = None
     if result and result.get("columns"):
         cols, rows = _enrich_world_names(result["columns"], result["rows"])
+        cols, rows = _enrich_tenant_contacts(cols, rows)
         csv_path = os.path.join(REPORTS_DIR, stem + ".csv")
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -515,6 +600,13 @@ def _handle_tool_call(call, state):
         )
     if name == "name_worlds":
         return json.dumps(worlds.names_for_ids(args.get("product_ids", [])))
+    if name == "lookup_tenant_contacts":
+        q = args.get("query", "")
+        hits = lxp.lookup(q, limit=int(args.get("limit") or 10))
+        console.print(
+            f"  [dim]↳ tenant lookup: '{q}' → {len(hits)} match(es)[/]"
+        )
+        return json.dumps({"matches": hits}, default=str)
     if name == "create_chart":
         try:
             path = charts.render_chart(args)
@@ -667,7 +759,11 @@ def main():
                 "MORE THAN ONE distinct tenant matches, STOP and ask the user "
                 "which one they meant — show a short numbered list with name, "
                 "country, and tenant id. Do NOT call save_tenant_pdf yet.\n"
-                "2. Once a single tenant is identified, gather (each via "
+                "2. Once a single tenant is identified, call "
+                "`lookup_tenant_contacts` with the tenant_id to fetch "
+                "AM/Account Executive/vertical/renewal/etc. from LXP. Carry "
+                "these into the save_tenant_pdf call as `account_contact` "
+                "(snake_case keys). Then gather (each via "
                 "run_sql, joining on the tenant id):\n"
                 "   a. The FULL available history of monthly MAU and NUA "
                 "      (oldest first). Use the canonical month column (cast to "
