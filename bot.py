@@ -282,12 +282,15 @@ TOOLS = [
                 "Render a detailed, fact-only PDF report for a SINGLE tenant. "
                 "Use only for /tenant requests. Gather every field with run_sql "
                 "FIRST; do not invent figures. Include the full available "
-                "monthly history of MAU and NUA (oldest first), the current "
-                "full month, the year-over-year comparison vs. the same month "
-                "one year earlier, top content by sessions, device breakdown, "
-                "and a status classification (HEALTHY / INTENSIVE / PIPELINE / "
-                "DECLINE) with a one-line factual rationale. Highlights must be "
-                "facts (numbers, ratios, ranks) — no assumptions or advice."
+                "monthly history of MAU and NUA (oldest first), the LAST FULL "
+                "month (never the partial in-progress month) as current_month, "
+                "the year-over-year comparison vs. the same month one year "
+                "earlier, a trailing-6-month YoY comparison (yoy_6m) to smooth "
+                "seasonality, top content by sessions, device breakdown, and a "
+                "status classification (HEALTHY / INTENSIVE / PIPELINE / "
+                "DECLINE) with a one-line factual rationale that cites both "
+                "the single-month and 6-month YoY % changes. Highlights must "
+                "be facts (numbers, ratios, ranks) — no assumptions or advice."
             ),
             "parameters": {
                 "type": "object",
@@ -323,6 +326,27 @@ TOOLS = [
                             "prior_nua":      {"type": "number"},
                             "mau_change_pct": {"type": "number"},
                             "nua_change_pct": {"type": "number"},
+                        },
+                    },
+                    "yoy_6m": {
+                        "type": "object",
+                        "description": (
+                            "Trailing-6-month year-over-year comparison "
+                            "ending at the last full month. Use SUM totals "
+                            "(metric='sum') unless you explicitly used "
+                            "averages (metric='avg')."
+                        ),
+                        "properties": {
+                            "metric":            {"type": "string",
+                                                   "enum": ["sum", "avg"]},
+                            "current_period":    {"type": "string"},
+                            "prior_period":      {"type": "string"},
+                            "current_mau":       {"type": "number"},
+                            "current_nua":       {"type": "number"},
+                            "prior_mau":         {"type": "number"},
+                            "prior_nua":         {"type": "number"},
+                            "mau_change_pct":    {"type": "number"},
+                            "nua_change_pct":    {"type": "number"},
                         },
                     },
                     "monthly_series": {
@@ -648,28 +672,42 @@ def main():
                 "   a. The FULL available history of monthly MAU and NUA "
                 "      (oldest first). Use the canonical month column (cast to "
                 "      YYYY-MM strings).\n"
-                "   b. The current full month MAU and NUA.\n"
-                "   c. Year-over-year comparison: the same month one year "
-                "      earlier, plus % change for MAU and NUA.\n"
-                "   d. Top 10 content/worlds by sessions for this tenant from "
+                "   b. The LAST FULL month of MAU and NUA. Do NOT use the "
+                "      partial in-progress current month — always step back to "
+                "      the most recent month that has fully closed. Use that "
+                "      month as the 'current_month' anchor for all comparisons.\n"
+                "   c. Year-over-year (single month) comparison: same month "
+                "      one year earlier vs. the last full month from (b), "
+                "      with % change for MAU and NUA.\n"
+                "   d. Trailing-6-month YoY comparison (to smooth seasonality):\n"
+                "      sum/avg MAU and NUA across the last 6 FULL months "
+                "      ending at the anchor month from (b), and compare to the "
+                "      same 6 calendar months one year earlier. Report both "
+                "      period totals (or averages — be explicit which) and the "
+                "      % change for MAU and NUA.\n"
+                "   e. Top 10 content/worlds by sessions for this tenant from "
                 "      content_sessions_monthly (resolve world_product_id "
                 "      with name_worlds).\n"
-                "   e. Device breakdown (sessions or users) if a device or "
+                "   f. Device breakdown (sessions or users) if a device or "
                 "      platform column exists; otherwise omit.\n"
-                "   f. Any other long-view facts: months active, peak MAU + "
+                "   g. Any other long-view facts: months active, peak MAU + "
                 "      month, peak NUA + month.\n"
-                "3. Classify status using ONLY these rules (compare current "
-                "month vs. 3-month and 12-month trend):\n"
+                "3. Classify status using ONLY these rules, evaluated against "
+                "   the trailing-6-month YoY change (preferred, because it "
+                "   smooths seasonality), with the single-month YoY as a "
+                "   tiebreaker:\n"
                 "   - HEALTHY   = MAU growth AND NUA growth\n"
                 "   - INTENSIVE = MAU flat, NUA growth\n"
                 "   - PIPELINE  = MAU growth, NUA flat or declining\n"
                 "   - DECLINE   = MAU decline AND NUA decline\n"
                 "   Pick the closest match for edge cases. The rationale must "
-                "   cite the specific % changes you observed — no opinions, no "
-                "   forecasts, no recommendations.\n"
-                "4. Call save_tenant_pdf ONCE with all the gathered fields. "
-                "   highlights[] must be short factual statements (numbers, "
-                "   ranks, months) — never assumptions, never advice.\n"
+                "   cite the specific % changes you observed (both the single-"
+                "   month and the 6-month YoY) — no opinions, no forecasts, "
+                "   no recommendations.\n"
+                "4. Call save_tenant_pdf ONCE with all the gathered fields, "
+                "   including the new yoy_6m block. highlights[] must be "
+                "   short factual statements (numbers, ranks, months) — never "
+                "   assumptions, never advice.\n"
                 "5. In chat, reply with a brief one-paragraph summary and the "
                 "   saved PDF path."
             )

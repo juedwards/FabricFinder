@@ -15,9 +15,20 @@ Spec schema (all keys optional unless noted; missing data shows "n/a"):
       "status":      "HEALTHY" | "INTENSIVE" | "PIPELINE" | "DECLINE",
       "status_rationale": str,            # facts only, no assumptions
       "current_month": {"month": "YYYY-MM", "mau": int, "nua": int},
-      "yoy": {                            # year-over-year vs same month -12
+      # NOTE: current_month must be the LAST FULL month (never the partial
+      # in-progress one), so YoY comparisons aren't skewed by an incomplete
+      # period.
+      "yoy": {                            # single-month YoY vs same month -12
         "prior_month": "YYYY-MM",
         "prior_mau": int,  "prior_nua": int,
+        "mau_change_pct": float, "nua_change_pct": float,
+      },
+      "yoy_6m": {                         # trailing-6-month YoY (seasonality)
+        "metric": "sum" | "avg",
+        "current_period": "YYYY-MM..YYYY-MM",
+        "prior_period":   "YYYY-MM..YYYY-MM",
+        "current_mau": int, "current_nua": int,
+        "prior_mau":   int, "prior_nua":   int,
         "mau_change_pct": float, "nua_change_pct": float,
       },
       "monthly_series": [                 # full long-view, oldest first
@@ -45,9 +56,52 @@ from reportlab.lib import colors  # noqa: E402
 from reportlab.lib.pagesizes import LETTER  # noqa: E402
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # noqa: E402
 from reportlab.lib.units import inch  # noqa: E402
+from reportlab.pdfbase import pdfmetrics  # noqa: E402
+from reportlab.pdfbase.ttfonts import TTFont  # noqa: E402
 from reportlab.platypus import (  # noqa: E402
     Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
 )
+
+
+# --------------------------------------------------------------------------- #
+# Unicode font registration
+# --------------------------------------------------------------------------- #
+# ReportLab's built-in Helvetica uses WinAnsi encoding and renders many
+# Unicode characters (Δ, U+2011 non-breaking hyphen, U+2212 minus sign, etc.)
+# as the missing-glyph box (■). Register DejaVu Sans (ships with matplotlib)
+# so all our styles can render arbitrary Unicode produced by the LLM.
+BASE_FONT = "Helvetica"
+BOLD_FONT = "Helvetica-Bold"
+
+
+def _register_unicode_fonts() -> None:
+    global BASE_FONT, BOLD_FONT
+    try:
+        import matplotlib as _mpl
+        font_dir = os.path.join(_mpl.get_data_path(), "fonts", "ttf")
+        regular = os.path.join(font_dir, "DejaVuSans.ttf")
+        bold = os.path.join(font_dir, "DejaVuSans-Bold.ttf")
+        if os.path.exists(regular):
+            pdfmetrics.registerFont(TTFont("DejaVuSans", regular))
+            BASE_FONT = "DejaVuSans"
+        if os.path.exists(bold):
+            pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", bold))
+            BOLD_FONT = "DejaVuSans-Bold"
+        if BASE_FONT == "DejaVuSans":
+            from reportlab.pdfbase.pdfmetrics import registerFontFamily
+            registerFontFamily(
+                "DejaVuSans",
+                normal="DejaVuSans",
+                bold=BOLD_FONT,
+                italic="DejaVuSans",
+                boldItalic=BOLD_FONT,
+            )
+    except Exception:
+        # Fall back to Helvetica silently; PDF will still render.
+        pass
+
+
+_register_unicode_fonts()
 
 REPORTS_DIR = os.environ.get(
     "FABRICFINDER_REPORTS_DIR",
@@ -188,8 +242,15 @@ def render_tenant_pdf(spec: dict) -> str:
     h1 = styles["Heading1"]
     h2 = styles["Heading2"]
     body = styles["BodyText"]
+    # Apply the Unicode font to all default styles so any character the LLM
+    # emits (Δ, en/em dashes, non-breaking hyphens, minus sign, emoji-ish
+    # symbols, etc.) renders instead of showing as a missing-glyph box.
+    for _style in (h1, h2, body):
+        _style.fontName = BOLD_FONT if _style.fontName.endswith("-Bold") else BASE_FONT
+    body.fontName = BASE_FONT
     small = ParagraphStyle(
-        "small", parent=body, fontSize=8, textColor=colors.grey, leading=10
+        "small", parent=body, fontSize=8, textColor=colors.grey, leading=10,
+        fontName=BASE_FONT,
     )
 
     doc = SimpleDocTemplate(
@@ -273,7 +334,8 @@ def render_tenant_pdf(spec: dict) -> str:
     t = Table(summary, colWidths=[1.1 * inch, 1.7 * inch, 2.2 * inch, 1.4 * inch])
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECEFF1")),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTNAME", (0, 0), (-1, -1), BASE_FONT),
+        ("FONTNAME", (0, 0), (-1, 0), BOLD_FONT),
         ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
@@ -283,6 +345,56 @@ def render_tenant_pdf(spec: dict) -> str:
     ]))
     story.append(t)
     story.append(Spacer(1, 0.18 * inch))
+
+    # --- Trailing-6-month YoY (smooths seasonality) ----------------------- #
+    yoy6 = spec.get("yoy_6m") or {}
+    if yoy6:
+        metric = (yoy6.get("metric") or "sum").lower()
+        metric_label = "Sum" if metric == "sum" else "Average"
+        story.append(Paragraph(
+            f"Trailing 6 months YoY ({metric_label}): "
+            f"<b>{yoy6.get('current_period', 'n/a')}</b> "
+            f"vs <b>{yoy6.get('prior_period', 'n/a')}</b>",
+            h2,
+        ))
+        six_rows = [
+            ["", f"Current 6mo ({metric_label.lower()})",
+             f"Prior 6mo ({metric_label.lower()})", "Δ YoY"],
+            [
+                "MAU",
+                _fmt_int(yoy6.get("current_mau")),
+                _fmt_int(yoy6.get("prior_mau")),
+                _fmt_pct(yoy6.get("mau_change_pct")),
+            ],
+            [
+                "NUA",
+                _fmt_int(yoy6.get("current_nua")),
+                _fmt_int(yoy6.get("prior_nua")),
+                _fmt_pct(yoy6.get("nua_change_pct")),
+            ],
+        ]
+        t6 = Table(
+            six_rows,
+            colWidths=[1.1 * inch, 2.0 * inch, 1.9 * inch, 1.4 * inch],
+        )
+        t6.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECEFF1")),
+            ("FONTNAME", (0, 0), (-1, -1), BASE_FONT),
+            ("FONTNAME", (0, 0), (-1, 0), BOLD_FONT),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(t6)
+        story.append(Paragraph(
+            "Trailing-period totals smooth out single-month seasonality and "
+            "give a more reliable read on year-over-year direction.",
+            small,
+        ))
+        story.append(Spacer(1, 0.18 * inch))
 
     # --- Long-view trend chart -------------------------------------------- #
     trend_path = _line_mau_nua(spec.get("monthly_series") or [], stem)
@@ -305,7 +417,8 @@ def render_tenant_pdf(spec: dict) -> str:
         mt = Table(rows, colWidths=[1.5 * inch, 1.4 * inch, 1.4 * inch])
         mt.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECEFF1")),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTNAME", (0, 0), (-1, -1), BASE_FONT),
+            ("FONTNAME", (0, 0), (-1, 0), BOLD_FONT),
             ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
