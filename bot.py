@@ -8,6 +8,7 @@ to ./reports. Conversation history persists across sessions in ./memory.
 import csv
 import json
 import os
+import time
 from datetime import datetime
 
 import updater
@@ -15,12 +16,14 @@ import usage_log
 
 # Check for a newer version on the git remote and restart if we updated.
 # Must run before we import heavy modules / read env, so the new code is used.
-updater.check_and_update()
+# Skipped when imported by the GUI (FABRICFINDER_NO_AUTOUPDATE=1).
+if not os.environ.get("FABRICFINDER_NO_AUTOUPDATE"):
+    updater.check_and_update()
 
 APP_VERSION = updater.get_version()
 
 from dotenv import load_dotenv
-from openai import AzureOpenAI
+from openai import APIConnectionError, APITimeoutError, AzureOpenAI
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -49,12 +52,35 @@ MAX_TOOL_TURNS = 24
 MEMORY_RECALL = 15   # how many past interactions to feed the model
 MEMORY_KEEP = 100    # how many to retain on disk
 
+
+def _read_env(name: str) -> str:
+    val = os.environ.get(name, "").strip()
+    if not val:
+        raise RuntimeError(
+            f"Missing required setting: {name}. Fill it in .env and restart."
+        )
+    lowered = val.lower()
+    if any(
+        token in lowered
+        for token in ("your-key-here", "your-resource", "<", "example")
+    ):
+        raise RuntimeError(
+            f"{name} appears to still be a placeholder in .env. "
+            "Set real Azure OpenAI values and restart."
+        )
+    return val
+
+
+AZURE_OPENAI_API_KEY = _read_env("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT = _read_env("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_API_VERSION = _read_env("AZURE_OPENAI_API_VERSION")
+DEPLOYMENT = _read_env("AZURE_OPENAI_DEPLOYMENT_NAME")
+
 client = AzureOpenAI(
-    api_key=os.environ["AZURE_OPENAI_API_KEY"],
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+    api_key=AZURE_OPENAI_API_KEY,
+    azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    api_version=AZURE_OPENAI_API_VERSION,
 )
-DEPLOYMENT = os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
 
 SYSTEM_PROMPT = """You are FabricFinder, a data analyst assistant for the \
 Microsoft Education "HelixMCEDU" Fabric SQL warehouse.
@@ -71,6 +97,38 @@ Your job:
    once to persist a Markdown report, then give the user a concise summary in
    chat. A CSV of your most recent query's results is exported automatically
    alongside the report.
+
+Agentic analysis mode (for exploratory, strategy, or "deep dive" requests):
+- Be goal-seeking, not query-seeking: define the decision/question to resolve,
+    then run the minimum set of queries needed to reach a high-confidence answer.
+- Do NOT stop after the first plausible result. Run a short analysis loop:
+    1) baseline totals/trends, 2) key segment breakdowns (geo/tenant/content/
+    device/time), 3) outlier and concentration checks, 4) alternative-theory
+    tests and sanity checks.
+- Proactively surface insights the user did not explicitly ask for when they are
+    decision-relevant (e.g., concentration risk, seasonality artifacts, anomalous
+    tenants, possible denominator effects, data sparsity, or filter bias).
+- For any important conclusion, propose at least 2 plausible alternative
+    explanations and test them with additional SQL before finalizing.
+- Explicitly test for common confounders where applicable:
+    composition changes (mix shift), partial-period leakage, outlier-driven lifts,
+    and geography/value normalization mistakes.
+- If evidence is mixed, say so and present confidence as High/Medium/Low with a
+    one-line reason.
+- Include a short "Missed Insights Check" section in answers for deep-dive
+    prompts: list 2-4 non-obvious findings and whether each is confirmed,
+    refuted, or inconclusive.
+- Include a short "Alternative Theories Tested" section for deep-dive prompts:
+    theory, SQL test performed, and outcome.
+
+Non-hallucination contract:
+- Never present a numeric claim unless it is supported by an executed `run_sql`
+    result from this turn.
+- If evidence is insufficient, do not infer. State what is unknown and run the
+    query needed to verify it.
+- Treat tool errors, empty result sets, and truncated results as evidence
+    limitations; disclose them before drawing conclusions.
+- Any report must be traceable to executed SQL in this turn.
 
 Reporting time anchor (applies to EVERY question, not just /tenant):
 - Today is {today}. The current calendar month is INCOMPLETE. NEVER use it
@@ -142,6 +200,9 @@ Worlds / content:
   the IDs back to readable names before reporting (the DB cannot do this join).
 - If a name matches no world in the content list, tell the user it wasn't found
   and (optionally) show close matches from `search_worlds`.
+
+Warehouse architecture briefing:
+{architecture}
 
 Schema (database dbo):
 {schema}
@@ -549,6 +610,42 @@ def save_report(title, markdown_body, result):
     return {"report": md_path, "csv": csv_path}
 
 
+def _short_sql(sql: str, max_len: int = 220) -> str:
+    compact = " ".join((sql or "").split())
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 3] + "..."
+
+
+def _evidence_markdown(state: dict) -> str:
+    entries = state.get("sql_history") or []
+    if not entries:
+        return ""
+    out = [
+        "\n\n## Evidence Ledger (Auto-generated)",
+        "",
+        "| # | Outcome | Rows | Truncated | Query (excerpt) |",
+        "|---:|---|---:|:---:|---|",
+    ]
+    for i, e in enumerate(entries, start=1):
+        if e.get("error"):
+            outcome = "error"
+            rows = "0"
+            trunc = "n/a"
+            query = _short_sql(e.get("query", ""))
+            if e["error"]:
+                query = f"{query} [error: {e['error']}]"
+        else:
+            outcome = "ok"
+            rows = str(e.get("row_count", 0))
+            trunc = "yes" if e.get("truncated") else "no"
+            query = _short_sql(e.get("query", ""))
+        # Keep tables valid if SQL contains pipes.
+        query = query.replace("|", "\\|")
+        out.append(f"| {i} | {outcome} | {rows} | {trunc} | `{query}` |")
+    return "\n".join(out)
+
+
 # --------------------------------------------------------------------------- #
 # Cross-session conversation memory
 # --------------------------------------------------------------------------- #
@@ -598,11 +695,24 @@ def _handle_tool_call(call, state):
     args = json.loads(call.function.arguments or "{}")
     if name == "run_sql":
         console.print("  [dim]↳ running SQL...[/]")
+        sql = args.get("query", "")
         try:
-            result = db.run_query(args.get("query", ""))
+            result = db.run_query(sql)
             state["last_result"] = result  # remember for CSV export
+            state.setdefault("sql_history", []).append(
+                {
+                    "query": sql,
+                    "row_count": result.get("row_count", 0),
+                    "truncated": bool(result.get("truncated")),
+                    "columns": result.get("columns", []),
+                }
+            )
+            state["sql_success_count"] = state.get("sql_success_count", 0) + 1
             return json.dumps(result)
         except Exception as e:
+            state.setdefault("sql_history", []).append(
+                {"query": sql, "error": str(e)}
+            )
             return json.dumps({"error": str(e)})
     if name == "search_worlds":
         hits = worlds.search_worlds(args.get("name", ""))
@@ -632,8 +742,19 @@ def _handle_tool_call(call, state):
         except Exception as e:
             return json.dumps({"error": str(e)})
     if name == "save_report":
+        if state.get("sql_success_count", 0) == 0:
+            return json.dumps(
+                {
+                    "error": (
+                        "Refusing to save report: no successful run_sql evidence "
+                        "exists for this turn. Execute SQL first."
+                    )
+                }
+            )
+        body = (args.get("markdown_body") or "").strip()
+        body += _evidence_markdown(state)
         paths = save_report(
-            args["title"], args["markdown_body"], state.get("last_result")
+            args["title"], body, state.get("last_result")
         )
         state["report_path"] = paths["report"]
         console.print(f"  [dim]↳ report saved: {paths['report']}[/]")
@@ -662,9 +783,28 @@ def answer(messages, state):
          "total_tokens": 0, "llm_calls": 0},
     )
     for _ in range(MAX_TOOL_TURNS):
-        resp = client.chat.completions.create(
-            model=DEPLOYMENT, messages=messages, tools=TOOLS
-        )
+        # Retry transient network timeouts before failing the full turn.
+        for attempt in range(3):
+            try:
+                resp = client.chat.completions.create(
+                    model=DEPLOYMENT, messages=messages, tools=TOOLS
+                )
+                break
+            except (APIConnectionError, APITimeoutError) as e:
+                if attempt < 2:
+                    wait_s = 2 ** attempt
+                    console.print(
+                        "[yellow]Temporary Azure OpenAI network issue "
+                        f"(attempt {attempt + 1}/3). Retrying in "
+                        f"{wait_s}s...[/]"
+                    )
+                    time.sleep(wait_s)
+                    continue
+                raise RuntimeError(
+                    "Could not reach Azure OpenAI after retries. "
+                    "Check AZURE_OPENAI_* values in .env and your network "
+                    "(VPN/proxy/firewall)."
+                ) from e
         if getattr(resp, "usage", None) is not None:
             usage["prompt_tokens"] += resp.usage.prompt_tokens or 0
             usage["completion_tokens"] += resp.usage.completion_tokens or 0
@@ -688,7 +828,9 @@ def main():
     with console.status(
         "[cyan]Connecting to HelixMCEDU…[/]", spinner="dots"
     ):
-        schema = db.get_schema_context()
+        schema_bundle = db.get_schema_bundle()
+        schema = schema_bundle["schema"]
+        architecture = schema_bundle["architecture"]
     console.print(
         Panel.fit(
             Text.from_markup(
@@ -709,6 +851,7 @@ def main():
         {
             "role": "system",
             "content": SYSTEM_PROMPT.format(
+                architecture=architecture,
                 schema=schema,
                 memory=memory_block(),
                 today=datetime.now().strftime("%Y-%m-%d"),
