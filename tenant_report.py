@@ -231,12 +231,13 @@ def _pie_devices(items, stem) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 # PDF assembly
 # --------------------------------------------------------------------------- #
-def render_tenant_pdf(spec: dict) -> str:
+def render_tenant_pdf(spec: dict, output_dir: Optional[str] = None) -> str:
     """Render a tenant PDF from ``spec`` and return the output path."""
     tenant_name = spec.get("tenant_name") or "Unknown Tenant"
-    os.makedirs(REPORTS_DIR, exist_ok=True)
+    output_dir = output_dir or REPORTS_DIR
+    os.makedirs(output_dir, exist_ok=True)
     stem = f"{datetime.now():%Y-%m-%d_%H%M%S}_tenant-{_slug(tenant_name)}"
-    pdf_path = os.path.join(REPORTS_DIR, stem + ".pdf")
+    pdf_path = os.path.join(output_dir, stem + ".pdf")
 
     styles = getSampleStyleSheet()
     h1 = styles["Heading1"]

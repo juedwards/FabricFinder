@@ -31,7 +31,7 @@ def _floats(seq):
     return out
 
 
-def render_chart(spec):
+def render_chart(spec, output_dir=None):
     """spec keys: chart_type, title, x_label, y_label, x, y, values, bins,
     series_name. Returns the saved PNG path."""
     ctype = (spec.get("chart_type") or "bar").lower()
@@ -71,9 +71,10 @@ def render_chart(spec):
         ax.grid(axis="y", linestyle=":", alpha=0.5)
 
     fig.tight_layout()
-    os.makedirs(CHARTS_DIR, exist_ok=True)
+    output_dir = output_dir or CHARTS_DIR
+    os.makedirs(output_dir, exist_ok=True)
     fname = f"{datetime.now():%Y-%m-%d_%H%M%S}_{_slug(title)}.png"
-    path = os.path.join(CHARTS_DIR, fname)
+    path = os.path.join(output_dir, fname)
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path

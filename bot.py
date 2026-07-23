@@ -90,7 +90,10 @@ Your job:
    e.g. follow-ups like "and for teachers only?").
 2. Use the `run_sql` tool to query the warehouse and gather the answer. You may
    run several queries (explore, then refine). Always inspect results before
-   concluding.
+   concluding. For EVERY `run_sql` call, provide a concise `purpose` explaining
+   why the query is needed for the user's question and an `explanation`
+   describing what the SQL does; FabricFinder saves these with the SQL in a
+   separate query-notes Markdown file.
 3. If the question CANNOT be answered from the available tables/columns, clearly
    tell the user it is not possible and explain what data would be needed.
 4. When you have a substantive, data-backed answer, call `save_report` exactly
@@ -238,9 +241,23 @@ TOOLS = [
                     "query": {
                         "type": "string",
                         "description": "A single read-only T-SQL query.",
-                    }
+                    },
+                    "purpose": {
+                        "type": "string",
+                        "description": (
+                            "Why this query is needed to answer the user's "
+                            "question or validate a filter."
+                        ),
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": (
+                            "Plain-language description of what this SQL "
+                            "selects, filters, joins, groups, or calculates."
+                        ),
+                    },
                 },
-                "required": ["query"],
+                "required": ["query", "purpose", "explanation"],
             },
         },
     },
@@ -551,6 +568,15 @@ def _slug(text: str) -> str:
     return "-".join(keep.lower().split())[:60] or "report"
 
 
+def create_output_dir(request: str) -> str:
+    """Create the folder that holds every artifact for one user request."""
+    now = datetime.now()
+    folder = f"{now:%Y-%m-%d_%H%M%S_%f}_{_slug(request)}"
+    path = os.path.join(REPORTS_DIR, folder)
+    os.makedirs(path)
+    return path
+
+
 def _enrich_world_names(columns, rows):
     """If results contain world_product_id, insert a world_name column next to it."""
     lower = [c.lower() for c in columns]
@@ -581,17 +607,18 @@ def _enrich_tenant_contacts(columns, rows):
     return new_cols, new_rows
 
 
-def save_report(title, markdown_body, result):
-    os.makedirs(REPORTS_DIR, exist_ok=True)
+def save_report(title, markdown_body, result, output_dir=None):
+    output_dir = output_dir or REPORTS_DIR
+    os.makedirs(output_dir, exist_ok=True)
     now = datetime.now()
     stem = f"{now:%Y-%m-%d_%H%M%S}_{_slug(title)}"
-    md_path = os.path.join(REPORTS_DIR, stem + ".md")
+    md_path = os.path.join(output_dir, stem + ".md")
 
     csv_path = None
     if result and result.get("columns"):
         cols, rows = _enrich_world_names(result["columns"], result["rows"])
         cols, rows = _enrich_tenant_contacts(cols, rows)
-        csv_path = os.path.join(REPORTS_DIR, stem + ".csv")
+        csv_path = os.path.join(output_dir, stem + ".csv")
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(cols)
@@ -646,6 +673,31 @@ def _evidence_markdown(state: dict) -> str:
     return "\n".join(out)
 
 
+def save_sql_note(query, purpose, explanation, query_number, output_dir=None):
+    """Save the rationale, explanation, and SQL for one warehouse query."""
+    sql_notes_dir = os.path.join(output_dir or REPORTS_DIR, "sql")
+    os.makedirs(sql_notes_dir, exist_ok=True)
+    now = datetime.now()
+    filename = f"{now:%Y-%m-%d_%H%M%S_%f}_sql-query-{query_number:02d}.md"
+    path = os.path.join(sql_notes_dir, filename)
+    body = (
+        f"# SQL Query {query_number}\n\n"
+        f"*Generated: {now:%Y-%m-%d %H:%M:%S}*  \n"
+        "*Source: HelixMCEDU (Microsoft Fabric)*\n\n"
+        "## Why this query was run\n\n"
+        f"{purpose.strip()}\n\n"
+        "## What this SQL does\n\n"
+        f"{explanation.strip()}\n\n"
+        "## SQL\n\n"
+        "```sql\n"
+        f"{query.strip()}\n"
+        "```\n"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(body)
+    return path
+
+
 # --------------------------------------------------------------------------- #
 # Cross-session conversation memory
 # --------------------------------------------------------------------------- #
@@ -696,6 +748,16 @@ def _handle_tool_call(call, state):
     if name == "run_sql":
         console.print("  [dim]↳ running SQL...[/]")
         sql = args.get("query", "")
+        query_number = len(state.setdefault("sql_notes", [])) + 1
+        note_path = save_sql_note(
+            sql,
+            args.get("purpose", ""),
+            args.get("explanation", ""),
+            query_number,
+            state.get("output_dir"),
+        )
+        state["sql_notes"].append(note_path)
+        console.print(f"  [dim]↳ SQL note saved: {note_path}[/]")
         try:
             result = db.run_query(sql)
             state["last_result"] = result  # remember for CSV export
@@ -708,12 +770,15 @@ def _handle_tool_call(call, state):
                 }
             )
             state["sql_success_count"] = state.get("sql_success_count", 0) + 1
+            result["sql_note"] = os.path.basename(note_path)
             return json.dumps(result)
         except Exception as e:
             state.setdefault("sql_history", []).append(
                 {"query": sql, "error": str(e)}
             )
-            return json.dumps({"error": str(e)})
+            return json.dumps(
+                {"error": str(e), "sql_note": os.path.basename(note_path)}
+            )
     if name == "search_worlds":
         hits = worlds.search_worlds(args.get("name", ""))
         console.print(
@@ -735,7 +800,7 @@ def _handle_tool_call(call, state):
         return json.dumps({"matches": hits}, default=str)
     if name == "create_chart":
         try:
-            path = charts.render_chart(args)
+            path = charts.render_chart(args, state.get("output_dir"))
             state["chart_path"] = path
             console.print(f"  [dim]↳ chart created: {path}[/]")
             return json.dumps({"chart_file": os.path.basename(path)})
@@ -754,7 +819,10 @@ def _handle_tool_call(call, state):
         body = (args.get("markdown_body") or "").strip()
         body += _evidence_markdown(state)
         paths = save_report(
-            args["title"], body, state.get("last_result")
+            args["title"],
+            body,
+            state.get("last_result"),
+            state.get("output_dir"),
         )
         state["report_path"] = paths["report"]
         console.print(f"  [dim]↳ report saved: {paths['report']}[/]")
@@ -763,7 +831,9 @@ def _handle_tool_call(call, state):
         return json.dumps({"saved_to": paths["report"], "csv": paths["csv"]})
     if name == "save_tenant_pdf":
         try:
-            path = tenant_report.render_tenant_pdf(args)
+            path = tenant_report.render_tenant_pdf(
+                args, state.get("output_dir")
+            )
             state["report_path"] = path
             console.print(f"  [dim]↳ tenant PDF saved: {path}[/]")
             return json.dumps({"saved_to": path})
@@ -873,7 +943,8 @@ def main():
             console.print(f"[cyan]FabricFinder version:[/] {APP_VERSION}")
             continue
         if low.startswith("/log"):
-            zip_path = usage_log.bundle_logs(REPORTS_DIR)
+            output_dir = create_output_dir(q)
+            zip_path = usage_log.bundle_logs(output_dir)
             totals = usage_log.session_totals()
             cost_str = (
                 f"${totals['cost_usd']:.4f}"
@@ -969,7 +1040,7 @@ def main():
         else:
             content = q
         messages.append({"role": "user", "content": content})
-        state = {}
+        state = {"output_dir": create_output_dir(q)}
         error = None
         try:
             reply = answer(messages, state)

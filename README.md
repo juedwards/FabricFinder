@@ -12,9 +12,11 @@ chart) to `reports/`.
   to the model.
 - **World name search** — content is stored only by `world_product_id` (GUID);
   the bot resolves names ↔ IDs via `Master Content List.xlsx`.
-- **Dated reports** — every answered question produces
-  `reports/YYYY-MM-DD_HHMMSS_<title>.md` with the question, the SQL used, a
-  results table, and analysis.
+- **Per-question output folders** — every request gets a timestamped folder in
+  `reports/` that contains its report, CSV, chart, tenant PDF, and SQL notes.
+- **SQL query notes** — every warehouse query also produces a separate Markdown
+  file in that request's `sql/` subfolder with the exact SQL, why it was run,
+  and a plain-language explanation.
 - **CSV export** alongside each report (auto-enriched with a `world_name`
   column when results contain `world_product_id`).
 - **Charts** — `/chart <prompt>` renders a histogram/bar/line/pie/scatter PNG
